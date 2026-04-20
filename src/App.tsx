@@ -98,46 +98,38 @@ export default function App() {
     joystickRef.current = joystick;
   }, [joystick]);
 
-  // Initialize NPCs (One Boss and many minions per revealed room)
+  // NPC Spawner Logic (Flowing from Gates)
   useEffect(() => {
     const minionEmojis = ['👾', '🤫', '🗿', '👺', '🤡', '💀', '👽', '🕺'];
-    const initialNpcs: BrainrotNPC[] = [];
     
-    STAGES.forEach(room => {
-      // Room Boss
-      const bossDepth = room.depth / 500;
-      initialNpcs.push({
-        id: `boss-${room.id}`,
-        roomId: room.id,
-        x: (Math.random() - 0.5) * ROOM_SIZE,
-        y: room.depth + (Math.random() - 0.5) * (ROOM_SIZE * 0.4),
-        speed: 1.2 + (bossDepth * 0.1),
-        hasBlock: true,
-        blockRarity: RARITY_WEIGHTS[Math.min(5, Math.floor(room.depth / 2000) + 1)],
-        angle: Math.random() * Math.PI * 2,
-        emoji: '🤌',
-        isBoss: true
-      });
+    const spawnNPC = () => {
+      // Spawn in unlocked rooms
+      const lastUnlocked = Math.max(...lastStateRef.current.unlockedRoomIds.map(id => parseInt(id.split('-')[1])));
+      const targetRoomNum = Math.floor(Math.random() * (lastUnlocked + 1));
+      const targetRoomId = `room-${targetRoomNum}`;
+      const room = STAGES.find(r => r.id === targetRoomId);
+      if (!room) return;
 
-      // Minions
-      for(let j = 0; j < 5; j++) {
-        initialNpcs.push({
-          id: `minion-${room.id}-${j}`,
-          roomId: room.id,
-          x: (Math.random() - 0.5) * ROOM_SIZE,
-          y: (Math.random() - 0.5) * ROOM_SIZE + room.depth,
-          speed: 1 + Math.random(),
-          hasBlock: true,
-          blockRarity: 'Common',
-          angle: Math.random() * Math.PI * 2,
-          emoji: minionEmojis[Math.floor(Math.random() * minionEmojis.length)],
-          isBoss: false
-        });
-      }
-    });
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const newNpc: BrainrotNPC = {
+        id: `npc-${Date.now()}-${Math.random()}`,
+        roomId: targetRoomId,
+        x: side * (ROOM_SIZE / 2), // Spawning at the "Gate" (sides)
+        y: room.depth + (Math.random() - 0.5) * ROOM_SIZE,
+        speed: 1 + Math.random() + (room.depth / 2000),
+        hasBlock: Math.random() < 0.7, // Some start with block
+        blockRarity: RARITY_WEIGHTS[Math.floor(Math.random() * 3)],
+        angle: side === 1 ? Math.PI : 0, // Move towards center
+        emoji: minionEmojis[Math.floor(Math.random() * minionEmojis.length)],
+        isBoss: false
+      };
 
-    setNpcs(initialNpcs);
-    npcsRef.current = initialNpcs;
+      setNpcs(prev => [...prev.slice(-40), newNpc]); 
+      npcsRef.current = [...npcsRef.current.slice(-40), newNpc];
+    };
+
+    const interval = setInterval(spawnNPC, 2000); 
+    return () => clearInterval(interval);
   }, []);
 
   // Trade offers generation
@@ -249,7 +241,18 @@ export default function App() {
 
         let hasBlock = npc.hasBlock;
         const distToPlayer = Math.sqrt((newX - playerRef.current.x)**2 + (newY - playerRef.current.y)**2);
-        
+
+        // NPC Stealing from Player
+        if (!hasBlock && distToPlayer < 30) {
+          if (lastStateRef.current.inventory.length > 0) {
+            hasBlock = true;
+            setGameState(prev => ({
+              ...prev,
+              inventory: prev.inventory.slice(0, -1) // NPC steals the last one
+            }));
+          }
+        }
+
         if (hasBlock && distToPlayer < 40) {
           if (lastStateRef.current.inventory.length < lastStateRef.current.inventoryCapacity) {
             hasBlock = false;
@@ -446,6 +449,58 @@ export default function App() {
     });
   };
 
+  const buyBlock = (type: LuckyBlock['type']) => {
+    const costs: Record<LuckyBlock['type'], number> = {
+      Classic: 100,
+      Super: 500,
+      Galaxy: 2000,
+      Rainbow: 10000,
+      Void: 5000
+    };
+    const rarities: Record<LuckyBlock['type'], Rarity> = {
+      Classic: 'Common',
+      Super: 'Epic',
+      Galaxy: 'Legendary',
+      Rainbow: 'Mythic',
+      Void: 'Legendary'
+    };
+
+    setGameState(prev => {
+      if (prev.money < costs[type]) return prev;
+      if (prev.inventory.length >= prev.inventoryCapacity) return prev;
+      
+      const newBlock: LuckyBlock = {
+        id: `buy-${Date.now()}`,
+        rarity: rarities[type],
+        depth: 0,
+        type: type
+      };
+      
+      return {
+        ...prev,
+        money: prev.money - costs[type],
+        inventory: [...prev.inventory, newBlock]
+      };
+    });
+  };
+
+  const sellBlock = (id: string) => {
+    setGameState(prev => {
+      const block = prev.inventory.find(b => b.id === id);
+      if (!block) return prev;
+      
+      const baseValue = (RARITY_WEIGHTS.indexOf(block.rarity) + 1) * 50;
+      const multiplier = 1 + (block.depth / 1000);
+      const sellPrice = Math.floor(baseValue * multiplier);
+
+      return {
+        ...prev,
+        money: prev.money + sellPrice,
+        inventory: prev.inventory.filter(b => b.id !== id)
+      };
+    });
+  };
+
   const upgradeBase = (type: 'capacity' | 'multiplier') => {
     setGameState(prev => {
       if (type === 'capacity') {
@@ -579,7 +634,7 @@ export default function App() {
                   >
                     {isLocked && (
                       <div className="bg-red-600 text-white text-[10px] font-black px-4 py-1 rounded-full uppercase tracking-widest -translate-y-1/2">
-                        LOCKED - DEFEAT BOSS IN ROOM {roomIdx - 1}
+                        LOCKED - STEAL FROM BOSS IN ROOM {roomIdx - 1}
                       </div>
                     )}
                   </div>
@@ -592,6 +647,27 @@ export default function App() {
                     }}
                   >
                     ROOM {roomIdx}
+                  </div>
+                  {/* Gate Spawning Points */}
+                  <div 
+                    className="absolute w-2 h-32 bg-blue-500/30 blur-[4px] shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center font-black text-[8px] text-blue-400 rotate-180"
+                    style={{ 
+                      left: `calc(50% - ${ROOM_SIZE/2}px - var(--player-x))`,
+                      top: `calc(50% + ${room.depth}px - var(--player-y))`,
+                      transform: 'translate(-50%, -50%)'
+                    }}
+                  >
+                    GATE
+                  </div>
+                  <div 
+                    className="absolute w-2 h-32 bg-blue-500/30 blur-[4px] shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center font-black text-[8px] text-blue-400"
+                    style={{ 
+                      left: `calc(50% + ${ROOM_SIZE/2}px - var(--player-x))`,
+                      top: `calc(50% + ${room.depth}px - var(--player-y))`,
+                      transform: 'translate(-50%, -50%)'
+                    }}
+                  >
+                    GATE
                   </div>
                 </React.Fragment>
               );
@@ -737,7 +813,7 @@ export default function App() {
                         className="text-4xl font-black uppercase tracking-tighter italic text-white"
                         style={{ color: RARITY_COLORS[openingBlock.rarity] }}
                       >
-                        {openingBlock.blockType} {openingBlock.rarity} !!!
+                        {openingBlock.blockType} BRAINROT !!!
                       </motion.div>
                       <div className="text-xl font-bold text-zinc-400 mt-1">
                         {openingBlock.tool?.name || 'CASH STACK'}
@@ -831,21 +907,42 @@ export default function App() {
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="bg-zinc-900 border border-white/5 p-5 rounded-xl">
-                      <h3 className="text-zinc-500 text-xs font-mono uppercase mb-4 flex items-center gap-2">
-                         <Package className="w-3 h-3" /> インベントリ配分
+                      <h3 className="text-zinc-500 text-[10px] font-mono uppercase mb-4 flex items-center gap-2">
+                         <Box className="w-3 h-3" /> ラッキードロー・マシン (Brainrot)
                       </h3>
-                      <div className="flex flex-wrap gap-2">
-                        {RARITY_WEIGHTS.map(r => (
-                          <div key={r} className="bg-black/50 border border-white/5 px-3 py-2 rounded-lg flex items-center gap-2">
-                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: RARITY_COLORS[r] }} />
-                            <span className="text-xs text-white/70 font-mono">{r}: {gameState.inventory.filter(b => b.rarity === r).length}</span>
-                          </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        {[
+                          { type: 'Classic', color: 'bg-yellow-400', border: 'border-yellow-600', cost: 100 },
+                          { type: 'Super', color: 'bg-red-500', border: 'border-red-700', cost: 500 },
+                          { type: 'Galaxy', color: 'bg-blue-600', border: 'border-blue-800', cost: 2000 },
+                          { type: 'Rainbow', color: 'bg-gradient-to-tr from-red-500 via-green-500 to-blue-500', border: 'border-white', cost: 10000 },
+                        ].map(b => (
+                          <button 
+                            key={b.type}
+                            onClick={() => buyBlock(b.type as any)}
+                            className="bg-black/40 border border-white/5 p-3 rounded-lg flex flex-col items-center gap-1 hover:bg-white/5 transition-all group"
+                          >
+                            <div className={`w-8 h-8 ${b.color} ${b.border} border-2 rotate-3 shadow-[0_3px_0_rgba(0,0,0,0.3)] flex items-center justify-center font-black text-xs text-black group-hover:scale-110 transition-transform`}>?</div>
+                            <span className="text-[9px] font-bold text-zinc-500">{b.type}</span>
+                            <span className="text-[10px] text-emerald-500 font-mono">${b.cost}</span>
+                          </button>
                         ))}
                       </div>
                     </div>
                     <div className="bg-zinc-900 border border-white/5 p-5 rounded-xl flex flex-col justify-center">
-                      <span className="text-zinc-500 text-xs font-mono uppercase">グローバル収入倍率</span>
-                      <span className="text-4xl font-bold text-yellow-500">x{gameState.multiplier.toFixed(1)}</span>
+                      <span className="text-zinc-500 text-xs font-mono uppercase">インベントリ状態</span>
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {RARITY_WEIGHTS.map(r => (
+                          <div key={r} className="bg-black/50 border border-white/5 px-2 py-1 rounded flex items-center gap-1">
+                            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: RARITY_COLORS[r] }} />
+                            <span className="text-[8px] text-white/50 font-mono">{r}: {gameState.inventory.filter(b => b.rarity === r).length}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4">
+                        <span className="text-zinc-500 text-xs font-mono uppercase">グローバル収入倍率</span>
+                        <div className="text-2xl font-bold text-yellow-500">x{gameState.multiplier.toFixed(1)}</div>
+                      </div>
                     </div>
                   </div>
                   
@@ -872,9 +969,8 @@ export default function App() {
                   ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                       {gameState.inventory.map(block => (
-                        <button
+                        <div
                           key={block.id}
-                          onClick={() => openBlock(block.id)}
                           className="group relative bg-zinc-900 border border-white/5 p-4 rounded-xl hover:border-white/20 transition-all flex flex-col items-center gap-3 overflow-hidden"
                         >
                           <div className="absolute top-0 left-0 w-full h-1" style={{ backgroundColor: RARITY_COLORS[block.rarity] }} />
@@ -883,10 +979,21 @@ export default function App() {
                             <span className="text-[10px] font-mono block opacity-50 uppercase">{block.rarity}</span>
                             <span className="text-xs text-emerald-400 font-mono">{block.depth}m 知点</span>
                           </div>
-                          <div className="text-xs bg-white/5 px-2 py-1 rounded w-full text-center group-hover:bg-yellow-500 group-hover:text-black font-bold transition-all">
-                            開封
+                          <div className="flex gap-1 w-full">
+                            <button 
+                              onClick={() => openBlock(block.id)}
+                              className="flex-1 text-[10px] bg-white/10 px-1 py-1.5 rounded font-bold hover:bg-yellow-500 hover:text-black transition-all"
+                            >
+                              開封
+                            </button>
+                            <button 
+                              onClick={() => sellBlock(block.id)}
+                              className="flex-1 text-[10px] bg-red-500/10 text-red-500 px-1 py-1.5 rounded font-bold hover:bg-red-500 hover:text-white transition-all border border-red-500/20"
+                            >
+                              売却
+                            </button>
                           </div>
-                        </button>
+                        </div>
                       ))}
                     </div>
                   )}
