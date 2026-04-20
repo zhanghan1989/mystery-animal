@@ -36,6 +36,7 @@ export interface BrainrotNPC {
   angle: number;
   emoji: string;
   isBoss?: boolean;
+  lastTheftTime?: number;
 }
 
 export interface GameState {
