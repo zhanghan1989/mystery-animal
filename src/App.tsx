@@ -116,9 +116,7 @@ export default function App() {
         blockRarity: RARITY_WEIGHTS[Math.min(5, Math.floor(room.depth / 2000) + 1)],
         angle: Math.random() * Math.PI * 2,
         emoji: '🤌',
-        isBoss: true,
-        health: 100 + (bossDepth * 150),
-        maxHealth: 100 + (bossDepth * 150)
+        isBoss: true
       });
 
       // Minions
@@ -250,39 +248,8 @@ export default function App() {
         if (newY < roomBaseY - ROOM_SIZE/2 || newY > roomBaseY + ROOM_SIZE/2) newAngle = -newAngle;
 
         let hasBlock = npc.hasBlock;
-        let npcHealth = npc.health;
         const distToPlayer = Math.sqrt((newX - playerRef.current.x)**2 + (newY - playerRef.current.y)**2);
         
-        // Boss Damage Logic
-        if (npc.isBoss && distToPlayer < 70 && npcHealth && npcHealth > 0) {
-          const activeTool = currentState.hotbar[currentState.activeToolIndex];
-          let dmg = 1;
-          if (activeTool?.type === 'strength') dmg = activeTool.multiplier * 2;
-          npcHealth = Math.max(0, npcHealth - dmg * dt);
-
-          if (npcHealth === 0 && npc.health && npc.health > 0) {
-            // Unlock next room!
-            const nextRoomNum = parseInt(npc.roomId.split('-')[1]) + 1;
-            const nextRoomId = `room-${nextRoomNum}`;
-            const rewardMoney = 500 * (nextRoomNum);
-            const rewardGems = 5 * (nextRoomNum);
-            
-            setGameState(prev => ({
-              ...prev,
-              money: prev.money + rewardMoney,
-              gems: prev.gems + rewardGems,
-              unlockedRoomIds: prev.unlockedRoomIds.includes(nextRoomId) 
-                ? prev.unlockedRoomIds 
-                : [...prev.unlockedRoomIds, nextRoomId]
-            }));
-          }
-        }
-
-        // Defeated Bosses disappear
-        if (npc.isBoss && npcHealth === 0) {
-          return { ...npc, health: 0, x: -9999, y: -9999, hasBlock: false };
-        }
-
         if (hasBlock && distToPlayer < 40) {
           if (lastStateRef.current.inventory.length < lastStateRef.current.inventoryCapacity) {
             hasBlock = false;
@@ -312,11 +279,24 @@ export default function App() {
               type: blockType
             };
             
-            setGameState(prev => ({ ...prev, inventory: [...prev.inventory, newBlock] }));
+            setGameState(prev => {
+              const currentRoomNum = parseInt(npc.roomId.split('-')[1]);
+              const nextRoomId = `room-${currentRoomNum + 1}`;
+              const unlocked = npc.isBoss && !prev.unlockedRoomIds.includes(nextRoomId) 
+                ? [...prev.unlockedRoomIds, nextRoomId] 
+                : prev.unlockedRoomIds;
+
+              return {
+                ...prev,
+                inventory: [...prev.inventory, newBlock],
+                unlockedRoomIds: unlocked,
+                money: prev.money + (npc.isBoss ? 1000 : 0)
+              };
+            });
           }
         }
         if (!hasBlock && Math.random() < 0.001) hasBlock = true;
-        return { ...npc, x: newX, y: newY, angle: newAngle, hasBlock, health: npcHealth };
+        return { ...npc, x: newX, y: newY, angle: newAngle, hasBlock };
       });
 
       npcsRef.current = nextNpcs;
@@ -383,7 +363,6 @@ export default function App() {
       if (worldEvent?.type === 'multiplier') finalMultiplier *= 2; 
       const totalReward = Math.floor(baseValue * 50 * depthBonus * finalMultiplier);
 
-      // Roblox Luck Chance based on Block Type
       const toolCances: Record<LuckyBlock['type'], number> = {
         Classic: 0.3,
         Super: 0.5,
@@ -416,7 +395,7 @@ export default function App() {
 
       return {
         ...prev,
-        health: Math.min(prev.maxHealth, prev.health + 5), // Opening block heals a bit like a powerup
+        health: Math.min(prev.maxHealth, prev.health + 5), 
         money: prev.money + totalReward,
         inventory: prev.inventory.filter(b => b.id !== id),
         hotbar: nextHotbar
@@ -649,14 +628,6 @@ export default function App() {
                     {showSlang && (
                       <div className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white text-black text-[8px] font-black px-1 rounded animate-bounce">
                         {slang[idx % slang.length]}
-                      </div>
-                    )}
-                    {isBoss && npc.health && npc.health > 0 && (
-                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-16 h-1.5 bg-black/50 border border-white/20 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-red-500 transition-all duration-200"
-                          style={{ width: `${(npc.health / (npc.maxHealth || 100)) * 100}%` }}
-                        />
                       </div>
                     )}
                     <div className={`${isBoss ? 'text-6xl text-yellow-400' : 'text-3xl'} glitch-shadow group-hover:brainrot-shake ${isBoss ? 'drop-shadow-[0_0_25px_rgba(255,215,0,0.8)]' : ''}`}>

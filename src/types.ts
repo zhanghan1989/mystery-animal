@@ -36,8 +36,6 @@ export interface BrainrotNPC {
   angle: number;
   emoji: string;
   isBoss?: boolean;
-  health?: number;
-  maxHealth?: number;
 }
 
 export interface GameState {
