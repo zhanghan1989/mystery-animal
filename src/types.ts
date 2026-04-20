@@ -36,6 +36,8 @@ export interface BrainrotNPC {
   angle: number;
   emoji: string;
   isBoss?: boolean;
+  health?: number;
+  maxHealth?: number;
 }
 
 export interface GameState {
@@ -46,6 +48,7 @@ export interface GameState {
   depth: number;
   maxDepth: number;
   currentRoomId: string;
+  unlockedRoomIds: string[];
   inventory: LuckyBlock[];
   hotbar: (Tool | null)[]; // Roblox style 1-5 slots
   activeToolIndex: number;

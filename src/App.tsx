@@ -56,6 +56,7 @@ export default function App() {
     depth: 0,
     maxDepth: 0,
     currentRoomId: 'room-0',
+    unlockedRoomIds: ['room-0'],
     inventory: [],
     hotbar: Array(9).fill(null), // 9 slots like Roblox
     activeToolIndex: 0,
@@ -104,17 +105,20 @@ export default function App() {
     
     STAGES.forEach(room => {
       // Room Boss
+      const bossDepth = room.depth / 500;
       initialNpcs.push({
         id: `boss-${room.id}`,
         roomId: room.id,
         x: (Math.random() - 0.5) * ROOM_SIZE,
-        y: (Math.random() - 0.5) * ROOM_SIZE + room.depth,
-        speed: 1.5,
+        y: room.depth + (Math.random() - 0.5) * (ROOM_SIZE * 0.4),
+        speed: 1.2 + (bossDepth * 0.1),
         hasBlock: true,
         blockRarity: RARITY_WEIGHTS[Math.min(5, Math.floor(room.depth / 2000) + 1)],
         angle: Math.random() * Math.PI * 2,
         emoji: '🤌',
-        isBoss: true
+        isBoss: true,
+        health: 100 + (bossDepth * 150),
+        maxHealth: 100 + (bossDepth * 150)
       });
 
       // Minions
@@ -210,9 +214,19 @@ export default function App() {
           
           const moveX = (dx / dist) * currentState.baseSpeed * speedMult * dt;
           const moveY = (dy / dist) * currentState.baseSpeed * speedMult * dt;
+          
+          let targetY = playerRef.current.y + moveY;
+          const currentRoomIndex = Math.floor(targetY / 500);
+          const highestUnlockedIndex = Math.max(...currentState.unlockedRoomIds.map(id => parseInt(id.split('-')[1])));
+          
+          // Restricted by lock
+          if (currentRoomIndex > highestUnlockedIndex) {
+            targetY = highestUnlockedIndex * 500 + 450; // Bound to top of last unlocked room
+          }
+
           playerRef.current = {
             x: Math.max(-ROOM_SIZE/2, Math.min(ROOM_SIZE/2, playerRef.current.x + moveX)),
-            y: Math.max(0, Math.min(TOTAL_ROOMS * 500, playerRef.current.y + moveY))
+            y: Math.max(0, Math.min(TOTAL_ROOMS * 500, targetY))
           };
         }
       }
@@ -236,8 +250,39 @@ export default function App() {
         if (newY < roomBaseY - ROOM_SIZE/2 || newY > roomBaseY + ROOM_SIZE/2) newAngle = -newAngle;
 
         let hasBlock = npc.hasBlock;
+        let npcHealth = npc.health;
         const distToPlayer = Math.sqrt((newX - playerRef.current.x)**2 + (newY - playerRef.current.y)**2);
         
+        // Boss Damage Logic
+        if (npc.isBoss && distToPlayer < 70 && npcHealth && npcHealth > 0) {
+          const activeTool = currentState.hotbar[currentState.activeToolIndex];
+          let dmg = 1;
+          if (activeTool?.type === 'strength') dmg = activeTool.multiplier * 2;
+          npcHealth = Math.max(0, npcHealth - dmg * dt);
+
+          if (npcHealth === 0 && npc.health && npc.health > 0) {
+            // Unlock next room!
+            const nextRoomNum = parseInt(npc.roomId.split('-')[1]) + 1;
+            const nextRoomId = `room-${nextRoomNum}`;
+            const rewardMoney = 500 * (nextRoomNum);
+            const rewardGems = 5 * (nextRoomNum);
+            
+            setGameState(prev => ({
+              ...prev,
+              money: prev.money + rewardMoney,
+              gems: prev.gems + rewardGems,
+              unlockedRoomIds: prev.unlockedRoomIds.includes(nextRoomId) 
+                ? prev.unlockedRoomIds 
+                : [...prev.unlockedRoomIds, nextRoomId]
+            }));
+          }
+        }
+
+        // Defeated Bosses disappear
+        if (npc.isBoss && npcHealth === 0) {
+          return { ...npc, health: 0, x: -9999, y: -9999, hasBlock: false };
+        }
+
         if (hasBlock && distToPlayer < 40) {
           if (lastStateRef.current.inventory.length < lastStateRef.current.inventoryCapacity) {
             hasBlock = false;
@@ -271,7 +316,7 @@ export default function App() {
           }
         }
         if (!hasBlock && Math.random() < 0.001) hasBlock = true;
-        return { ...npc, x: newX, y: newY, angle: newAngle, hasBlock };
+        return { ...npc, x: newX, y: newY, angle: newAngle, hasBlock, health: npcHealth };
       });
 
       npcsRef.current = nextNpcs;
@@ -314,10 +359,16 @@ export default function App() {
   const TOOLS: Tool[] = [
     { id: 'speed_coil', name: 'スピード・コイル', emoji: '🌀', rarity: 'Uncommon', type: 'speed', multiplier: 1.5 },
     { id: 'gravity_coil', name: '重力コイル', emoji: '💫', rarity: 'Rare', type: 'strength', multiplier: 1.2 },
-    { id: 'ban_hammer', name: 'BANハンマー', emoji: '🔨', rarity: 'Legendary', type: 'strength', multiplier: 3.0 },
+    { id: 'ban_hammer', name: 'BANハンマー', emoji: '🔨', rarity: 'Legendary', type: 'strength', multiplier: 3.5 },
     { id: 'pizza_sword', name: 'ピザ・ソード', emoji: '🍕', rarity: 'Common', type: 'meme', multiplier: 1.1 },
     { id: 'golden_🤌', name: '黄金の🤌', emoji: '🤌', rarity: 'Mythic', type: 'money', multiplier: 5.0 },
-    { id: 'sigma_crown', name: 'シグマ・クラウン', emoji: '👑', rarity: 'Epic', type: 'meme', multiplier: 2.0 },
+    { id: 'sigma_crown', name: 'シギマ・クラウン', emoji: '👑', rarity: 'Epic', type: 'meme', multiplier: 2.0 },
+    { id: 'mewing_stone', name: 'ミューイング・ストーン', emoji: '🗿', rarity: 'Rare', type: 'strength', multiplier: 1.8 },
+    { id: 'skibidi_toilet', name: 'スキビディ・トイレ', emoji: '🚽', rarity: 'Epic', type: 'speed', multiplier: 2.2 },
+    { id: 'fanum_tax', name: 'ファナム・タックス', emoji: '🍔', rarity: 'Uncommon', type: 'money', multiplier: 1.4 },
+    { id: 'sus_imposter', name: 'サス・インポスター', emoji: '📮', rarity: 'Rare', type: 'meme', multiplier: 1.5 },
+    { id: 'ice_cream_so_good', name: 'アイスクリーム最高', emoji: '🍦', rarity: 'Common', type: 'money', multiplier: 1.2 },
+    { id: 'italy_tricolore', name: '三色旗マント', emoji: '🇮🇹', rarity: 'Legendary', type: 'speed', multiplier: 2.8 },
   ];
 
   const openBlock = (id: string) => {
@@ -534,27 +585,38 @@ export default function App() {
             />
 
             {/* Room Dividers & Room Labels */}
-            {STAGES.map(room => (
-              <React.Fragment key={room.id}>
-                <div 
-                  className="absolute w-full border-t-4 border-dashed border-white/5 flex items-center justify-center"
-                  style={{ 
-                    top: `calc(50% + ${room.depth - ROOM_SIZE/2}px - var(--player-y))`,
-                    height: '2px'
-                  }}
-                />
-                <div 
-                  className="absolute pointer-events-none opacity-20 text-[60px] font-black font-display uppercase tracking-tighter text-white/10 italic"
-                  style={{ 
-                    left: 'calc(50% - var(--player-x))',
-                    top: `calc(50% + ${room.depth}px - var(--player-y))`,
-                    transform: 'translate(-50%, -50%)'
-                  }}
-                >
-                  ROOM {room.id.split('-')[1]}
-                </div>
-              </React.Fragment>
-            ))}
+            {STAGES.map(room => {
+              const roomIdx = parseInt(room.id.split('-')[1]);
+              const isLocked = !gameState.unlockedRoomIds.includes(room.id);
+              
+              return (
+                <React.Fragment key={room.id}>
+                  <div 
+                    className={`absolute w-full border-t-8 transition-colors duration-500 flex items-center justify-center ${isLocked ? 'border-red-600/50 shadow-[0_0_20px_rgba(220,38,38,0.5)]' : 'border-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.2)]'}`}
+                    style={{ 
+                      top: `calc(50% + ${room.depth - ROOM_SIZE/2}px - var(--player-y))`,
+                      height: '8px'
+                    }}
+                  >
+                    {isLocked && (
+                      <div className="bg-red-600 text-white text-[10px] font-black px-4 py-1 rounded-full uppercase tracking-widest -translate-y-1/2">
+                        LOCKED - DEFEAT BOSS IN ROOM {roomIdx - 1}
+                      </div>
+                    )}
+                  </div>
+                  <div 
+                    className="absolute pointer-events-none opacity-20 text-[60px] font-black font-display uppercase tracking-tighter text-white/10 italic"
+                    style={{ 
+                      left: 'calc(50% - var(--player-x))',
+                      top: `calc(50% + ${room.depth}px - var(--player-y))`,
+                      transform: 'translate(-50%, -50%)'
+                    }}
+                  >
+                    ROOM {roomIdx}
+                  </div>
+                </React.Fragment>
+              );
+            })}
 
             {/* Base Indicator */}
             <div 
@@ -587,6 +649,14 @@ export default function App() {
                     {showSlang && (
                       <div className="absolute -top-12 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white text-black text-[8px] font-black px-1 rounded animate-bounce">
                         {slang[idx % slang.length]}
+                      </div>
+                    )}
+                    {isBoss && npc.health && npc.health > 0 && (
+                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-16 h-1.5 bg-black/50 border border-white/20 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-red-500 transition-all duration-200"
+                          style={{ width: `${(npc.health / (npc.maxHealth || 100)) * 100}%` }}
+                        />
                       </div>
                     )}
                     <div className={`${isBoss ? 'text-6xl text-yellow-400' : 'text-3xl'} glitch-shadow group-hover:brainrot-shake ${isBoss ? 'drop-shadow-[0_0_25px_rgba(255,215,0,0.8)]' : ''}`}>
